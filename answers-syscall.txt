@@ -1,0 +1,323 @@
+syscall
+add-auto-load-safe-path /home/oasis/code/xv6-labs-2023/.gdbinit
+
+----
+
+trap 是什么？
+trap是
+
+---
+
+Looking at the backtrace output, which function called syscall?
+from the backtrace:
+``` c
+(gdb) bt
+#0  syscall () at kernel/syscall.c:148
+#1  0x0000000080001d6e in usertrap () at kernel/trap.c:67
+#2  0x0505050505050505 in ?? ()
+
+```
+
+the function *0x0000000080001d6e call the syscall, which is in usertrap
+``` c
+//
+// handle an interrupt, exception, or system call from user space.
+// called from trampoline.S
+//
+void
+usertrap(void)
+{
+  int which_dev = 0;
+
+  if((r_sstatus() & SSTATUS_SPP) != 0)
+    panic("usertrap: not from user mode");
+
+  // send interrupts and exceptions to kerneltrap(),
+  // since we're now in the kernel.
+  w_stvec((uint64)kernelvec);
+
+  struct proc *p = myproc();
+  
+  // save user program counter.
+  p->trapframe->epc = r_sepc();
+  
+  if(r_scause() == 8){
+    // system call
+
+    if(killed(p))
+      exit(-1);
+
+    // sepc points to the ecall instruction,
+    // but we want to return to the next instruction.
+    p->trapframe->epc += 4;
+
+    // an interrupt will change sepc, scause, and sstatus,
+    // so enable only now that we're done with those registers.
+    intr_on();
+
+    syscall();
+  } else if((which_dev = devintr()) != 0){
+    // ok
+  } else {
+    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+    setkilled(p);
+  }
+
+  if(killed(p))
+    exit(-1);
+
+  // give up the CPU if this is a timer interrupt.
+  if(which_dev == 2)
+    yield();
+
+  usertrapret();
+}
+```
+好好读了这份代码，首先是检查权限，riscv中有一个寄存器，sstatus
+(gdb) p/t $sstatus
+$3 = 100000
+这个寄存器是控制权限使用的，例如在内核态还是在用户态
+```
+// Supervisor Status Register, sstatus
+
+#define SSTATUS_SPP (1L << 8)  // Previous mode, 1=Supervisor, 0=User
+#define SSTATUS_SPIE (1L << 5) // Supervisor Previous Interrupt Enable
+#define SSTATUS_UPIE (1L << 4) // User Previous Interrupt Enable
+#define SSTATUS_SIE (1L << 1)  // Supervisor Interrupt Enable
+#define SSTATUS_UIE (1L << 0)  // User Interrupt Enable
+```
+需要从用户态切换到内核态，这个过程需要保存用户态的寄存器。
+会想当时做协程实验，程序就是一个状态机，现在程序正在运行，但是有系统调用，需要切换到另一个地方去处理。
+#### 这里使用了trapframe 这个数据结构，
+应该是修改process 的 epc为下一个指令的地址，这里应该是调用syscall的进程。
+    // sepc points to the ecall instruction,
+    // but we want to return to the next instruction.
+    p->trapframe->epc += 4;
+```c
+void
+syscall(void)
+{
+  int num;
+  struct proc *p = myproc();
+
+  num = p->trapframe->a7;
+  if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
+    // Use num to lookup the system call function for num, call it,
+    // and store its return value in p->trapframe->a0
+    p->trapframe->a0 = syscalls[num]();
+  } else {
+    printf("%d %s: unknown sys call %d\n",
+            p->pid, p->name, num);
+    p->trapframe->a0 = -1;
+  }
+}
+```
+至于怎么切换栈，怎么进入内核模式的，还是认真读下书。
+• stvec: The kernel writes the address of its trap handler here; the RISC-V jumps here to handle a trap.
+```
+  // send interrupts and exceptions to kerneltrap(),
+  // since we're now in the kernel.
+  w_stvec((uint64)kernelvec);
+```
+1. If the trap is a device interrupt, and the sstatus SIE bit is clear, don’t do any of the following.
+2. Disable interrupts by clearing SIE.
+3. Copy the pc to sepc.
+4. Save the current mode (user or supervisor) in the SPP bit in sstatus.
+5. Set scause to reflect the trap’s cause.
+6. Set the mode to supervisor.
+7. Copy stvec to the pc
+怎么实现这个步骤的，前面的代码看不太清楚，
+* 比如说，syscall中需要暂时先关闭中断？
+* 还有这个stvec应该是决定trap返回的？
+文章中解释了，比如说仅仅切换模式到特权模式，然后继续在用户空间上执行例如trap处理代码。不太行，因为破坏了隔离的条件。
+ It is thus important that the CPU switch to a kernel- specified instruction address, namely stvec.
+ 
+ ----
+ Type n a few times to step past struct proc *p = myproc(); Once past this statement, type p /x *p, which prints the current process's proc struct (see kernel/proc.h>) in hex.
+ ``` 
+$6 = {lock = {locked = 0x0, name = 0x800081b8, cpu = 0x0}, state = 0x4,
+  chan = 0x0, killed = 0x0, xstate = 0x0, pid = 0x1, parent = 0x0,
+  kstack = 0x3fffffc000, sz = 0x1000, pagetable = 0x87f73000,
+  trapframe = 0x87f74000, context = {ra = 0x800014be, sp = 0x3fffffce70,
+    s0 = 0x3fffffcea0, s1 = 0x80008dc0, s2 = 0x80008990, s3 = 0x1,
+    s4 = 0x3fffffced0, s5 = 0x8000ec48, s6 = 0x3, s7 = 0x80019a60, s8 = 0x1,
+    s9 = 0x80019b88, s10 = 0x4, s11 = 0x0}, ofile = {0x0 <repeats 16 times>},
+  cwd = 0x80016ed0, name = {0x69, 0x6e, 0x69, 0x74, 0x63, 0x6f, 0x64, 0x65,
+    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}}
+(gdb) 
+```
+What is the value of p->trapframe->a7 and what does that value represent? (Hint: look user/initcode.S, the first user program xv6 starts.)
+```
+(gdb) p p->trapframe->a7
+$7 = 7
+(gdb) 
+```
+这个答案比较简单，我知道，执行syscall 函数的时候，会有一个逻辑
+```c
+void
+syscall(void)
+{
+  int num;
+  struct proc *p = myproc();
+
+  num = p->trapframe->a7;
+  if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
+    // Use num to lookup the system call function for num, call it,
+    // and store its return value in p->trapframe->a0
+    p->trapframe->a0 = syscalls[num]();
+  } else {
+    printf("%d %s: unknown sys call %d\n",
+            p->pid, p->name, num);
+    p->trapframe->a0 = -1;
+  }
+}
+```
+syscall 是一个函数数组，里面对于的就是系统调用的首地址。
+```c
+static uint64 (*syscalls[])(void) = {
+[SYS_fork]    sys_fork,
+[SYS_exit]    sys_exit,
+[SYS_wait]    sys_wait,
+[SYS_pipe]    sys_pipe,
+[SYS_read]    sys_read,
+[SYS_kill]    sys_kill,
+[SYS_exec]    sys_exec,
+[SYS_fstat]   sys_fstat,
+[SYS_chdir]   sys_chdir,
+[SYS_dup]     sys_dup,
+[SYS_getpid]  sys_getpid,
+[SYS_sbrk]    sys_sbrk,
+[SYS_sleep]   sys_sleep,
+[SYS_uptime]  sys_uptime,
+[SYS_open]    sys_open,
+[SYS_write]   sys_write,
+[SYS_mknod]   sys_mknod,
+[SYS_unlink]  sys_unlink,
+[SYS_link]    sys_link,
+[SYS_mkdir]   sys_mkdir,
+[SYS_close]   sys_close,
+#ifdef LAB_NET
+[SYS_connect] sys_connect,
+#endif
+#ifdef LAB_PGTBL
+[SYS_pgaccess] sys_pgaccess,
+#endif
+};
+```
+还有另一个角度来证明,下面的代码initcode.s 是第一个user program。吧SYS_exec 系统调用给放到a7中。
+```
+# exec(init, argv)
+.globl start
+start:
+        la a0, init
+        la a1, argv
+        li a7, SYS_exec
+        ecall
+```
+The processor is running in kernel mode, and we can print privileged registers such as sstatus (see RISC-V privileged instructions for a description):
+
+    (gdb) p /x $sstatus
+  
+What was the previous mode that the CPU was in?
+这个答案也很简单。
+```
+Breakpoint 1, syscall () at kernel/syscall.c:148
+(gdb) n
+(gdb) p /x $sstatus
+$1 = 0x22
+(gdb) p/t $sstatus
+$2 = 100010
+(gdb) 
+```
+这个值的意义在这里：
+```
+// Supervisor Status Register, sstatus
+
+#define SSTATUS_SPP (1L << 8)  // Previous mode, 1=Supervisor, 0=User
+#define SSTATUS_SPIE (1L << 5) // Supervisor Previous Interrupt Enable
+#define SSTATUS_UPIE (1L << 4) // User Previous Interrupt Enable
+#define SSTATUS_SIE (1L << 1)  // Supervisor Interrupt Enable
+#define SSTATUS_UIE (1L << 0)  // User Interrupt Enable
+
+```
+首先是允许supervisor mode 的 中断，其次为Supervisor Previous Interrupt Enable， 但是 Previous mode, 1=Supervisor, 0=User 这个为0说明在previous mode 是 usermode
+
+panic. For example, replace the statement num = p->trapframe->a7; with num = * (int *) 0; at the beginning of syscall, run make qemu, and you will see something similar to:
+To track down the source of a kernel page-fault panic, search for the sepc value printed for the panic you just saw in the file kernel/kernel.asm, which contains the assembly for the compiled kernel.
+```
+// interrupts and exceptions from kernel code go here via kernelvec,
+// on whatever the current kernel stack is.
+void 
+kerneltrap()
+{
+  int which_dev = 0;
+  uint64 sepc = r_sepc();
+  uint64 sstatus = r_sstatus();
+  uint64 scause = r_scause();
+  
+  if((sstatus & SSTATUS_SPP) == 0)
+    panic("kerneltrap: not from supervisor mode");
+  if(intr_get() != 0)
+    panic("kerneltrap: interrupts enabled");
+
+  if((which_dev = devintr()) == 0){
+    printf("scause %p\n", scause);
+    printf("sepc=%p stval=%p\n", r_sepc(), r_stval());
+    panic("kerneltrap");
+  }
+
+  // give up the CPU if this is a timer interrupt.
+  if(which_dev == 2 && myproc() != 0 && myproc()->state == RUNNING)
+    yield();
+
+  // the yield() may have caused some traps to occur,
+  // so restore trap registers for use by kernelvec.S's sepc instruction.
+  w_sepc(sepc);
+  w_sstatus(sstatus);
+}
+```
+Write down the assembly instruction the kernel is panicing at. Which register corresponds to the variable num?
+这个参数感觉应该是source,
+```
+Program received signal SIGINT, Interrupt.
+panic (s=s@entry=0x800083c0 "kerneltrap") at kernel/printf.c:126
+
+0x8000204e <syscall+20> lw      a3,0(zero) # 0
+```
+非常有趣的是，这个assign 操作就会panic，然后会跳转到panic的程序，这个num的寄存器是a3
+To inspect the state of the processor and the kernel at the faulting instruction, fire up gdb, and set a breakpoint at the faulting epc, like this:
+
+```c
+(gdb) b *0x000000008000215a
+Breakpoint 1 at 0x8000215a: file kernel/syscall.c, line 247.
+(gdb) layout asm
+(gdb) c
+Continuing.
+[Switching to Thread 1.3]
+
+Thread 3 hit Breakpoint 1, syscall () at kernel/syscall.c:247
+Confirm that the faulting assembly instruction is the same as the one you found above.
+
+```
+
+Why does the kernel crash? Hint: look at figure 3-3 in the text; is address 0 mapped in the kernel address space? Is that confirmed by the value in scause above? (See description of scause in RISC-V privileged instructions)
+![[Pasted image 20231221222423.png]]
+The physical address 0-0x1000 is unused!
+![[Pasted image 20231221222713.png]]
+![[Pasted image 20231221223209.png]]
+```    
+push_off () at kernel/spinlock.c:94
+(gdb) p $sstatus
+$3 = 32
+(gdb) p/t $sstatus
+$4 = 100000
+(gdb) 
+```
+说明是5，load access fault
+Thread 3 hit Breakpoint 1, syscall () at kernel/syscall.c:148
+(gdb) n 
+(gdb) p p->name
+$1 = "initcode\000\000\000\000\000\000\000"
+(gdb) 
+说明出现错误的是initcode 这一段代码
