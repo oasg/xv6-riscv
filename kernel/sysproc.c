@@ -91,3 +91,13 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+
+//trace the system call
+uint64
+sys_trace(void){
+  struct proc * p = myproc();  //get current process
+  //then copy the mast to process
+  argint(0,(int*)(&p->tmask));
+  return 0;
+}
