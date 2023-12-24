@@ -5,6 +5,7 @@
 #include "memlayout.h"
 #include "spinlock.h"
 #include "proc.h"
+#include "sysinfo.h"
 
 uint64
 sys_exit(void)
@@ -99,5 +100,19 @@ sys_trace(void){
   struct proc * p = myproc();  //get current process
   //then copy the mast to process
   argint(0,(int*)(&p->tmask));
+  return 0;
+}
+//get system info
+uint64
+sys_sysinfo(void){
+  struct sysinfo sinfo; 
+  sinfo.nproc = get_process_num();
+  sinfo.freemem = get_free_mem(); 
+  //get current process
+  struct proc * p = myproc();
+  uint64 a_addr; //arg address
+  argaddr(0, &a_addr);
+  if(copyout(p->pagetable,a_addr , (char*)&sinfo, sizeof(sinfo)) < 0)
+    return -1;
   return 0;
 }
