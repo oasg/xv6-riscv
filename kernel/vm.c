@@ -449,3 +449,26 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
     return -1;
   }
 }
+void printchild(pagetable_t pgtbl,int high){
+  high ++;
+  for(int i = 0; i < 512; i++){    //find all pagetable
+    pte_t pte = pgtbl[i];
+    if(pte&PTE_V){
+      for(int j = 0;j<high-1;j++){
+        printf(".. ");
+      }
+      uint64 pa = PTE2PA(pte);
+      printf("..%d: pte %p pa %p\n",i,pte,pa);
+      if((pte & (PTE_R|PTE_W|PTE_X)) == 0){ //not leaf node
+        printchild((pagetable_t)pa,high);  //print the leaf
+      }
+    }
+  }
+}
+int
+vmprint(pagetable_t pgtbl){
+  // there are 2^9 = 512 PTEs in a page table.
+  printf("page table %p\n",pgtbl);
+  printchild(pgtbl,0);
+  return 0;
+}
