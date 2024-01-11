@@ -75,6 +75,29 @@ int
 sys_pgaccess(void)
 {
   // lab pgtbl: your code here.
+  uint64 buf;
+  int size;
+  uint64 bitadds;
+  argaddr(0,&buf);
+  argint(1,&size);
+  argaddr(2,&bitadds);  //bits's addree
+  //get the access bits
+  struct  proc * p = myproc();
+  //copy bits to kernal space
+  uint32 bits;
+  copyin(p->pagetable,(char*)&bits,bitadds,4);
+  //max scan 64 pages
+  for(int i = 0;i<size&&i<32;i++){
+    pte_t * pte = walk(p->pagetable,buf+i*PGSIZE,0);
+    if(1<<i & bits){
+      *pte = *pte&(~PTE_A);  //clear bits when on sets
+      bits = bits&~(1<<i);
+    }
+    if(*pte & PTE_A){
+      bits = bits|(1<<i);
+    }
+  }
+  copyout(p->pagetable,bitadds,(char* )&bits,4);
   return 0;
 }
 #endif
