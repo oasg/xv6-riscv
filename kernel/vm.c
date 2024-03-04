@@ -309,14 +309,16 @@ uvmfree(pagetable_t pagetable, uint64 sz)
 // physical memory.
 // returns 0 on success, -1 on failure.
 // frees any allocated pages on failure.
+
+//TODO map parent process space to child
 int
 uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 {
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
-
+  //char *mem;
+  
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
@@ -324,24 +326,30 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
-      goto err;
+    // due to map in to the same space
+    // the flags of parent and child will now allow write
+    flags = flags & ~PTE_W;
+
+    //alloc memory and copy
+    // if((mem = kalloc()) == 0)
+    //   goto err;
+    // memmove(mem, (char*)pa, PGSIZE);
+
+    //map parent page
+    if(mappages(new, i, PGSIZE, pa, flags) != 0){
+      // kfree(mem);
+      // goto err;
+      return -1;
     }
   }
-  return 0;
+  new = old;
 
- err:
-  uvmunmap(new, 0, i / PGSIZE, 1);
-  return -1;
+  return 0;
 }
 
 // mark a PTE invalid for user access.
 // used by exec for the user stack guard page.
-void
+
 uvmclear(pagetable_t pagetable, uint64 va)
 {
   pte_t *pte;
