@@ -14,6 +14,9 @@ pagetable_t kernel_pagetable;
 extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
+extern int cow_refs[];  //kalloc.c
+
+
 
 // Make a direct-map page table for the kernel.
 pagetable_t
@@ -290,7 +293,7 @@ freewalk(pagetable_t pagetable)
       panic("freewalk: leaf");
     }
   }
-  kfree((void*)pagetable);
+    kfree((void*)pagetable);
 }
 
 // Free user memory pages,
@@ -328,13 +331,13 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     flags = PTE_FLAGS(*pte);
     // due to map in to the same space
     // the flags of parent and child will now allow write
-    flags = flags & ~PTE_W;
-
-    //alloc memory and copy
-    // if((mem = kalloc()) == 0)
-    //   goto err;
-    // memmove(mem, (char*)pa, PGSIZE);
-
+    if(flags &  PTE_W){  //original page is writable
+      flags = flags & ~PTE_W;
+      // tag the page as the cow page
+      // oriange writble
+      flags = flags | 0x100; 
+    }
+    cow_refs[PAINDEX(pa)]++;
     //map parent page
     if(mappages(new, i, PGSIZE, pa, flags) != 0){
       // kfree(mem);
@@ -349,7 +352,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 
 // mark a PTE invalid for user access.
 // used by exec for the user stack guard page.
-
+void
 uvmclear(pagetable_t pagetable, uint64 va)
 {
   pte_t *pte;
@@ -374,19 +377,41 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     if(va0 >= MAXVA)
       return -1;
     pte = walk(pagetable, va0, 0);
-    if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0 ||
-       (*pte & PTE_W) == 0)
+    if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0 )
       return -1;
     pa0 = PTE2PA(*pte);
     n = PGSIZE - (dstva - va0);
     if(n > len)
       n = len;
+    
+    uint flags;
+    flags = PTE_FLAGS(*pte);
+    if(flags & 0x100){  //no write access
+      //cow page
+      int* mem ;
+      if((mem = kalloc()) == 0){
+        kfree(mem);
+        printf("alloc page failed");
+        return -1;
+      }
+      flags = flags|PTE_W; 
+      flags = flags & ~0x100;
+      memmove(mem,(void*)pa0,PGSIZE);
+      uvmunmap(pagetable,va0,1,1);
+      if(mappages(pagetable, va0, PGSIZE, (uint64)mem, flags) != 0){
+        kfree(mem);
+        printf("map copy page failed");
+        return -1;
+      }
+      printf("allocate new page %p\n",pa0);
+    }
+    pa0 = walkaddr(pagetable, va0);
     memmove((void *)(pa0 + (dstva - va0)), src, n);
-
     len -= n;
     src += n;
     dstva = va0 + PGSIZE;
   }
+
   return 0;
 }
 

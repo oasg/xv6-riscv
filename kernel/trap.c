@@ -50,7 +50,8 @@ usertrap(void)
   // save user program counter.
   p->trapframe->epc = r_sepc();
   
-  if(r_scause() == 8){
+  uint64 scause = r_scause();
+  if(scause == 8){
     // system call
 
     if(killed(p))
@@ -65,7 +66,41 @@ usertrap(void)
     intr_on();
 
     syscall();
-  } else if((which_dev = devintr()) != 0){
+  }else if(scause == 15){  //Store page fault
+    char * mem;
+    pte_t *pte;
+    uint64 va = r_stval();
+    uint64 pa0;
+    if((pte = walk(p->pagetable,va,0))==0){
+       panic("page write fault: pte should exist");
+    }
+    uint flags;
+    flags = PTE_FLAGS(*pte);
+    if(flags&0x100){
+      //original page is writable
+      //from cow page
+      //alloc one page
+      if((mem = kalloc()) == 0){
+        kfree(mem);
+        printf("alloc page failed");
+        setkilled(p);
+      }
+      pa0 = PTE2PA(*pte);
+      memmove(mem,(char*)pa0,PGSIZE);
+      flags = flags|PTE_W;  //set access to the new alloc bit
+      flags = flags & ~0x100;
+      uvmunmap(p->pagetable,PGROUNDDOWN(va),1,1);  //unmap the old page without freeing
+      if(mappages(p->pagetable, PGROUNDDOWN(va), PGSIZE, (uint64)mem, flags) != 0){
+        kfree(mem);
+        printf("map copy page failed");
+        setkilled(p);
+      }
+    }else{
+      printf("not allowed to write in the read only page\n");
+      setkilled(p);
+    }
+  }
+  else if((which_dev = devintr()) != 0){
     // ok
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);

@@ -13,6 +13,7 @@ void freerange(void *pa_start, void *pa_end);
 
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
+int cow_refs[(PHYSTOP-KERNBASE)/PGSIZE];
 
 struct run {
   struct run *next;
@@ -50,16 +51,18 @@ kfree(void *pa)
 
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
-
-  // Fill with junk to catch dangling refs.
-  memset(pa, 1, PGSIZE);
-
-  r = (struct run*)pa;
-
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+  int* ref = &cow_refs[PAINDEX((uint64)pa)];
+  *ref = *ref-1;
+  if(*ref <= 0){ //now cow page
+     // Fill with junk to catch dangling refs.
+     //printf("kfree ref = 0\n");
+      memset(pa, 1, PGSIZE);
+      r = (struct run*)pa;
+      acquire(&kmem.lock);
+      r->next = kmem.freelist;
+      kmem.freelist = r;
+      release(&kmem.lock);
+  }
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -74,6 +77,7 @@ kalloc(void)
   r = kmem.freelist;
   if(r)
     kmem.freelist = r->next;
+  cow_refs[PAINDEX((uint64)r)] = 1;
   release(&kmem.lock);
 
   if(r)

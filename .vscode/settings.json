@@ -1,0 +1,20 @@
+{
+    "files.associations": {
+        "defs.h": "c",
+        "riscv.h": "c",
+        "memlayout.h": "c",
+        "param.h": "c",
+        "types.h": "c",
+        "fs.h": "c",
+        "spinlock.h": "c",
+        "memory": "c",
+        "semaphore": "c",
+        "stop_token": "c",
+        "*.tcc": "c",
+        "iosfwd": "c",
+        "istream": "c",
+        "limits": "c",
+        "sstream": "c",
+        "streambuf": "c"
+    }
+}

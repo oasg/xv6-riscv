@@ -416,6 +416,7 @@ parseblock(char **ps, char *es)
 struct cmd*
 parseexec(char **ps, char *es)
 {
+
   char *q, *eq;
   int tok, argc;
   struct execcmd *cmd;
@@ -436,6 +437,7 @@ parseexec(char **ps, char *es)
       panic("syntax");
     cmd->argv[argc] = q;
     cmd->eargv[argc] = eq;
+    printf("argv[%d]: %s\n", argc, q);
     argc++;
     if(argc >= MAXARGS)
       panic("too many args");
