@@ -29,6 +29,53 @@ trapinithart(void)
   w_stvec((uint64)kernelvec);
 }
 
+
+
+//handle cow page faught
+int  handlecow(pagetable_t pagetable, uint64 va){
+    pte_t *pte;
+    uint64 va0 = PGROUNDDOWN(va);
+    if(va0 >= MAXVA)
+      return -1;
+    if((pte = walk(pagetable,va,0))==0){
+       panic("page write fault: pte should exist");
+    }
+    if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0 )
+      return -1;
+    uint flags;
+    flags = PTE_FLAGS(*pte);
+    if(flags&PTE_C){
+      uint64 pa0;
+      //original page is writable
+      //from cow page
+      //alloc one page
+      char * mem;
+      if((mem = kalloc()) == 0){
+        kfree(mem);
+        printf("alloc page failed");
+        return -1;
+      }
+      pa0 = PTE2PA(*pte);
+      memmove(mem,(char*)pa0,PGSIZE);
+      flags = flags|PTE_W;  //set access to the new alloc bit
+      flags = flags & ~PTE_C;
+      uvmunmap(pagetable,va0,1,1);  //unmap the old page with freeing old page
+      if(mappages(pagetable, va0, PGSIZE, (uint64)mem, flags) != 0){
+        kfree(mem);
+        printf("map copy page failed");
+        return -1;
+      }
+      
+    }else{
+      if(flags&PTE_W){   //original page is writable
+        return 1;
+      }else{
+        return -2;  //no write permission
+      }
+      
+    }
+    return 0;
+}
 //
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
@@ -67,36 +114,9 @@ usertrap(void)
 
     syscall();
   }else if(scause == 15){  //Store page fault
-    char * mem;
-    pte_t *pte;
     uint64 va = r_stval();
-    uint64 pa0;
-    if((pte = walk(p->pagetable,va,0))==0){
-       panic("page write fault: pte should exist");
-    }
-    uint flags;
-    flags = PTE_FLAGS(*pte);
-    if(flags&0x100){
-      //original page is writable
-      //from cow page
-      //alloc one page
-      if((mem = kalloc()) == 0){
-        kfree(mem);
-        printf("alloc page failed");
-        setkilled(p);
-      }
-      pa0 = PTE2PA(*pte);
-      memmove(mem,(char*)pa0,PGSIZE);
-      flags = flags|PTE_W;  //set access to the new alloc bit
-      flags = flags & ~0x100;
-      uvmunmap(p->pagetable,PGROUNDDOWN(va),1,1);  //unmap the old page without freeing
-      if(mappages(p->pagetable, PGROUNDDOWN(va), PGSIZE, (uint64)mem, flags) != 0){
-        kfree(mem);
-        printf("map copy page failed");
-        setkilled(p);
-      }
-    }else{
-      printf("not allowed to write in the read only page\n");
+    int ret = handlecow(p->pagetable,va);
+    if(ret < 0){
       setkilled(p);
     }
   }

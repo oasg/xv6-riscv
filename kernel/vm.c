@@ -14,8 +14,6 @@ pagetable_t kernel_pagetable;
 extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
-extern int cow_refs[];  //kalloc.c
-
 
 
 // Make a direct-map page table for the kernel.
@@ -331,22 +329,17 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     flags = PTE_FLAGS(*pte);
     // due to map in to the same space
     // the flags of parent and child will now allow write
-    if(flags &  PTE_W){  //original page is writable
-      flags = flags & ~PTE_W;
-      // tag the page as the cow page
-      // oriange writble
-      flags = flags | 0x100; 
-    }
-    cow_refs[PAINDEX(pa)]++;
+    flags = flags & ~PTE_W;
+    flags = flags | PTE_C; 
     //map parent page
     if(mappages(new, i, PGSIZE, pa, flags) != 0){
       // kfree(mem);
       // goto err;
+      uvmunmap(new,i,i/PGSIZE,1);
       return -1;
     }
+    incref(PAINDEX(pa));
   }
-  new = old;
-
   return 0;
 }
 
@@ -370,48 +363,22 @@ int
 copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
   uint64 n, va0, pa0;
-  pte_t *pte;
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
-    if(va0 >= MAXVA)
+    if(handlecow(pagetable, dstva) == -1)
       return -1;
-    pte = walk(pagetable, va0, 0);
-    if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0 )
+    pa0 = walkaddr(pagetable, va0);
+    if(pa0 == 0)
       return -1;
-    pa0 = PTE2PA(*pte);
     n = PGSIZE - (dstva - va0);
     if(n > len)
       n = len;
-    
-    uint flags;
-    flags = PTE_FLAGS(*pte);
-    if(flags & 0x100){  //no write access
-      //cow page
-      int* mem ;
-      if((mem = kalloc()) == 0){
-        kfree(mem);
-        printf("alloc page failed");
-        return -1;
-      }
-      flags = flags|PTE_W; 
-      flags = flags & ~0x100;
-      memmove(mem,(void*)pa0,PGSIZE);
-      uvmunmap(pagetable,va0,1,1);
-      if(mappages(pagetable, va0, PGSIZE, (uint64)mem, flags) != 0){
-        kfree(mem);
-        printf("map copy page failed");
-        return -1;
-      }
-      printf("allocate new page %p\n",pa0);
-    }
-    pa0 = walkaddr(pagetable, va0);
     memmove((void *)(pa0 + (dstva - va0)), src, n);
     len -= n;
     src += n;
     dstva = va0 + PGSIZE;
   }
-
   return 0;
 }
 

@@ -25,7 +25,8 @@ argfd(int n, int *pfd, struct file **pf)
   struct file *f;
 
   argint(n, &fd);
-  if(fd < 0 || fd >= NOFILE || (f=myproc()->ofile[fd]) == 0)
+  f = myproc()->ofile[fd];
+  if(fd < 0 || fd >= NOFILE || f == 0)
     return -1;
   if(pfd)
     *pfd = fd;
@@ -74,8 +75,10 @@ sys_read(void)
 
   argaddr(1, &p);
   argint(2, &n);
-  if(argfd(0, 0, &f) < 0)
+  if(argfd(0, 0, &f) < 0){
+    printf("file read argfd failed\n");
     return -1;
+  }
   return fileread(f, p, n);
 }
 
